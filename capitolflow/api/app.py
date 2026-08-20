@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import db
+from ..db import json_safe
 from . import views
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -24,7 +25,7 @@ def create_app(db_path: str | None = None):
     def wrap(fn, *a, **kw):
         con = conn()
         try:
-            return JSONResponse(fn(con, *a, **kw))
+            return JSONResponse(json_safe(fn(con, *a, **kw)))
         finally:
             con.close()
 
@@ -59,6 +60,10 @@ def create_app(db_path: str | None = None):
     def _lobbying():
         return wrap(views.lobbying)
 
+    @app.get("/api/predictions.json")
+    def _predictions():
+        return wrap(views.predictions)
+
     @app.get("/api/events.json")
     def _events(limit: int = 100):
         return wrap(views.events, limit=limit)
@@ -70,7 +75,7 @@ def create_app(db_path: str | None = None):
             d = views.member_detail(con, member_id)
             if not d["member"]:
                 raise HTTPException(404, "unknown member")
-            return JSONResponse(d)
+            return JSONResponse(json_safe(d))
         finally:
             con.close()
 

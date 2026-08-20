@@ -30,7 +30,18 @@ def main(argv=None) -> int:
     p = sub.add_parser("prices", help="fetch price history")
     p.add_argument("--max-tickers", type=int, default=None)
 
-    sub.add_parser("analytics", help="compute returns, member scores, event studies")
+    sub.add_parser("analytics", help="compute returns, member scores, timing, event studies")
+    sub.add_parser("context", help="fetch earnings, current-events themes and sector labels")
+    sub.add_parser("timing", help="report how much of the edge survives the disclosure lag")
+
+    p = sub.add_parser("backtest", help="fit factor weights and test them against a null")
+    p.add_argument("--splits", type=int, default=6)
+    p.add_argument("--null", type=int, default=120, help="shuffled-label draws per fold")
+
+    p = sub.add_parser("predict", help="produce the ranked short- and long-term lists")
+    p.add_argument("--top", type=int, default=10)
+    p.add_argument("--scoreboard", action="store_true",
+                   help="score previously-stored predictions against what happened")
 
     p = sub.add_parser("model", help="train the forward-return model")
     p.add_argument("--leakage-check", action="store_true",
@@ -38,7 +49,8 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("refresh", help="run every stage in order (use this in a scheduler)")
     p.add_argument("--full", action="store_true")
-    p.add_argument("--with-model", action="store_true")
+    p.add_argument("--with-model", action="store_true",
+                   help="also refit weights and regenerate predictions")
 
     p = sub.add_parser("export", help="write dashboard JSON")
     p.add_argument("--out", default="site")
@@ -82,6 +94,29 @@ def main(argv=None) -> int:
             _print(pipeline.sync_prices(con, max_tickers=a.max_tickers))
         elif a.cmd == "analytics":
             _print(pipeline.compute_analytics(con))
+        elif a.cmd == "context":
+            _print(pipeline.ingest_context(con))
+        elif a.cmd == "timing":
+            from .analytics import timing
+            t = timing.decompose(con)
+            timing.store(con, t)
+            _print({"summary": timing.summary(t), "decay": timing.fit_decay(con)})
+        elif a.cmd == "backtest":
+            _print(pipeline.run_backtest(con, n_splits=a.splits, n_null=a.null))
+        elif a.cmd == "predict":
+            if a.scoreboard:
+                from .analytics.rank import evaluate_past_predictions
+                from .analytics.features import LONG_HORIZON, SHORT_HORIZON
+                out = {}
+                for h in (SHORT_HORIZON, LONG_HORIZON):
+                    df = evaluate_past_predictions(con, h)
+                    out[h] = ({"n": 0} if df is None or df.empty else
+                              {"n": len(df),
+                               "mean_realised_excess": float(df["realised_excess"].mean()),
+                               "hit_rate": float((df["realised_excess"] > 0).mean())})
+                _print(out)
+            else:
+                _print(pipeline.make_predictions(con, top_n=a.top))
         elif a.cmd == "model":
             if a.leakage_check:
                 from .analytics.model import leakage_check

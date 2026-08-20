@@ -48,15 +48,32 @@ def forward_excess(series, t, i, h, bench="SPY"):
     return a - b
 
 
+# Child tables first: deleting a parent row while children reference it trips
+# the foreign-key constraint the schema deliberately enforces.
+_WIPE_ORDER = [
+    "trade_returns", "trade_timing", "event_studies", "member_scores",
+    "committee_memberships", "lobbying_activities", "predictions",
+    "factor_weights", "backtest_results", "transactions", "filings",
+    "member_aliases", "committees", "members", "prices", "securities",
+    "earnings", "event_index", "ticker_sectors", "lobbying_filings",
+    "policy_events", "ingest_runs", "kv",
+]
+
+
+def _wipe(con) -> None:
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for tbl in _WIPE_ORDER:
+        if tbl in have:
+            con.execute(f"DELETE FROM {tbl}")
+
+
 def build(path: str, seed: int = 7, n_members: int = 60, days: int = 900):
     rng = random.Random(seed)
     start = date.today() - timedelta(days=days + 400)
     series = gen_prices(rng, start, days)
 
     with db.session(path) as con:
-        for t in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
-            if t[0] not in ("sqlite_sequence",):
-                con.execute(f"DELETE FROM {t[0]}")
+        _wipe(con)
 
         # ---- prices
         rows = []

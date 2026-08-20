@@ -108,6 +108,47 @@ def member_detail(con, member_id: str):
     }
 
 
+def predictions(con):
+    """Latest ranked picks plus everything needed to judge how much to trust them."""
+    from ..db import get_kv
+    bt = get_kv(con, "last_backtest") or {}
+    as_of = con.execute("SELECT MAX(as_of) a FROM predictions").fetchone()
+    as_of = as_of["a"] if as_of else None
+    out = {"as_of": as_of, "horizons": {}, "backtest": {}, "timing": get_kv(con, "signal_decay"),
+           "timing_summary": get_kv(con, "timing_summary")}
+    if not as_of:
+        return out
+    for label, h in (("short_term", 21), ("long_term", 126)):
+        rows = _recs(pd.read_sql_query(
+            "SELECT ticker, rank, score, score_pctile, expected_excess, confidence,"
+            " attribution, rationale FROM predictions WHERE as_of=? AND horizon_days=?"
+            " ORDER BY rank", con, params=[as_of, h]))
+        for r in rows:
+            try:
+                r["attribution"] = json.loads(r["attribution"]) if r["attribution"] else {}
+            except Exception:
+                r["attribution"] = {}
+        w = _recs(pd.read_sql_query(
+            "SELECT factor, weight, raw_ic, stability FROM factor_weights WHERE horizon_days=?"
+            " AND as_of=(SELECT MAX(as_of) FROM factor_weights WHERE horizon_days=?)",
+            con, params=[h, h]))
+        bh = (bt.get("horizons") or {}).get(str(h)) or (bt.get("horizons") or {}).get(h) or {}
+        out["horizons"][label] = {
+            "horizon_days": h, "picks": rows, "weights": w,
+            "mean_ic": bh.get("mean_ic"), "null_ic_p95": bh.get("null_ic_p95"),
+            "beats_null": bh.get("beats_null"), "deflated_ic": bh.get("deflated_ic"),
+            "n_independent_groups": bh.get("n_independent_groups"),
+            "verdict": bh.get("verdict"),
+            "folds": _recs(pd.read_sql_query(
+                "SELECT fold, test_start, test_end, ic, long_short, null_ic_p95 "
+                "FROM backtest_results WHERE horizon_days=? ORDER BY fold", con, params=[h])),
+        }
+    out["backtest"] = {"overall_verdict": bt.get("overall_verdict"),
+                       "date_range": bt.get("date_range"), "n_rows": bt.get("n_rows"),
+                       "n_tickers": bt.get("n_tickers")}
+    return out
+
+
 def events(con, limit=100):
     return _recs(pd.read_sql_query("""
         SELECT e.key, e.event_date, e.car, e.car_tstat, e.beta, e.r2, e.n_obs,

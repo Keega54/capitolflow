@@ -29,10 +29,40 @@ used purely as a cross-check.
 | Cluster detection | Windows where an unusual number of people traded the same stock the same way |
 | Lobbying overlay | Company lobbying spend against trading interest, with committee-assignment matching |
 | Event study | Market-model cumulative abnormal returns around each trade date |
+| **Disclosure timing** | Splits each trade's edge at the filing date: how much happened before the public could act, how much was left |
+| **Ranked picks** | Top 10 short-term (~1 month) and top 10 long-term (~6 months), with per-factor attribution |
+| **Fitted weights** | Seven factors weighted by walk-forward regression, tested against a shuffled-label null |
 | Model | Gradient-boosted forward-return model with purged walk-forward validation |
 
 **Output** — a self-contained dashboard (light/dark, keyboard- and
 screen-reader-friendly, every chart backed by a sortable table) plus a JSON API.
+
+---
+
+## Read this before you read a ranking
+
+The single most important number this project produces is not a stock pick. It is
+**how much of a politician's edge survives the disclosure lag.**
+
+A member trades on day 0. The filing appears up to 45 days later. Whatever the
+stock did in between is unreachable — nobody outside the filer could have acted
+on it. So every trade's excess return is split in two:
+
+```
+total edge  =  before disclosure (unreachable)  +  after disclosure (capturable)
+```
+
+The dashboard's first panel shows that split, and the ranked picks are only worth
+reading if the "after" number is meaningfully positive. If the edge turns out to
+sit entirely before the filing goes public — which is exactly what you would
+expect if the information advantage is real and the market absorbs it fast — then
+the honest conclusion is that following disclosures is close to worthless, and
+this project is built to tell you that rather than hide it.
+
+Every ranking ships with a confidence banner driven by that test. When the model
+fails to beat random chance, the banner says **"No demonstrated signal"** and
+tells you to read the list as *where political activity is concentrated*, not as
+a forecast. That is a feature.
 
 ---
 
@@ -70,6 +100,62 @@ the budget if you want it to move faster and your job time limit allows.
 
 ---
 
+## How the picks are made
+
+Seven factors, each collapsed to one cross-sectionally standardized score:
+
+| Factor | What it measures |
+|---|---|
+| `politician_flow` | net congressional buying vs selling |
+| `politician_conviction` | how many distinct members, how much money |
+| `politician_freshness` | how recent the disclosures are, aged by a **fitted** decay half-life |
+| `lobbying` | federal lobbying spend and its year-over-year change |
+| `earnings` | surprise history, time since last report, whether the next is imminent |
+| `events` | current-events intensity **interacted with the stock's sector** |
+| `momentum` | price trend and volatility, so the model can't relabel drift as skill |
+
+The composite is a weighted sum. Weights come from ridge regression inside a
+walk-forward window, then get shrunk toward equal weighting, scaled down by
+bootstrap sign-stability, and clipped so no single factor can dominate. Seven
+fitted parameters against thousands of observations is a deliberately small
+budget — the temptation in this kind of project is to fit hundreds.
+
+**On "how does a war affect stocks":** an event theme's intensity is identical for
+every stock on a given day, so on its own it is useless for choosing *between*
+stocks — it gets annihilated the moment you standardize across the market. What
+carries information is the interaction: *is there a conflict escalating, AND does
+this company sell to defense ministries.* Each theme is therefore projected onto
+each stock's sector exposure. The direction and size of the effect are never
+asserted; the backtest fits them from history. The themes tracked are conflict,
+tariffs, energy, health, AI/semis, and monetary policy — deliberately few, because
+every extra theme is another chance to find a spurious correlation.
+
+## How overfitting is guarded against
+
+This is where most projects like this quietly fail, so the controls are explicit:
+
+1. **Purged, embargoed walk-forward splits.** Forward returns overlap, so any
+   training row whose target window reaches into the test period is dropped.
+   Random K-fold on overlapping returns leaks the future and is the single most
+   common way this kind of study fools itself.
+2. **A shuffled-label null.** The identical pipeline is re-run many times with
+   targets randomly permuted, producing the distribution of performance that pure
+   luck yields *on this data*. A real result must beat that distribution, not
+   zero. Comparing to zero is not good enough — with a fitted model and
+   overlapping returns, luck produces a positive score surprisingly often.
+3. **Block bootstrap by company, not by row.** Rows for one ticker across
+   overlapping windows are massively dependent. An ordinary row bootstrap treats
+   ~200 genuinely independent observations as thousands and reports 100%
+   stability for factors that are pure noise. Resampling whole companies is the
+   difference between a stability number that means something and one that always
+   says 1.00.
+4. **Deflation for multiple testing**, and reporting the number of independent
+   companies alongside the row count, so a big row count is never mistaken for
+   statistical power.
+
+The test suite plants known signals in synthetic data *and* a deliberate placebo
+factor, then asserts the harness loads on the real ones and starves the placebo.
+
 ## Making it update itself
 
 `.github/workflows/refresh.yml` runs the pipeline daily on GitHub Actions and
@@ -85,6 +171,31 @@ The SQLite database is carried between runs as a cache artifact, so each run onl
 fetches what is new. It is also uploaded as a downloadable artifact after every
 run, so you always have a copy of the data.
 
+### When does it update?
+
+| What | When |
+|---|---|
+| New disclosures, prices, earnings, events | every day, ~11:17 UTC (~7am ET) |
+| Factor weights refitted | Mondays, and on any manual run |
+| Rankings regenerated | every day, after the data refresh |
+| Dashboard republished | every day, right after |
+
+Weights are refitted weekly rather than daily on purpose: the underlying
+relationships move slowly, and refitting every day invites reading noise as
+change.
+
+You can always force a run: **Actions → refresh → Run workflow**.
+
+### Do I need a separate website?
+
+No. GitHub Pages *is* the free website, and it's already wired up — the workflow
+publishes to it on every run. Your dashboard lives at
+`https://<your-username>.github.io/capitolflow/` and updates itself with no
+server, no hosting bill, and nothing running on your laptop.
+
+If you later want a custom domain, add a `CNAME` file to the `site/` output and
+point your domain's DNS at GitHub Pages; nothing else about the setup changes.
+
 Optional API keys go in **Settings → Secrets and variables → Actions**:
 `LDA_API_KEY` (lobbying — free, from lda.gov), plus `FINNHUB_API_KEY`,
 `QUIVER_API_KEY`, `FMP_API_KEY` if you want commercial cross-check feeds. Every
@@ -99,7 +210,12 @@ capitolflow reference    # member roster, committees, SEC ticker map
 capitolflow ingest       # new disclosures  (--full to backfill)
 capitolflow lobbying     # lobbying filings
 capitolflow prices       # price history for every traded ticker
-capitolflow analytics    # returns, accuracy scores, event studies
+capitolflow analytics    # returns, accuracy scores, timing split, event studies
+capitolflow context      # earnings, current-events themes, sector labels
+capitolflow timing       # how much edge survives the disclosure lag
+capitolflow backtest     # fit factor weights, test against a shuffled-label null
+capitolflow predict      # produce the top-10 short and long term lists
+capitolflow predict --scoreboard   # score PAST predictions against what happened
 capitolflow model        # train the forward-return model
 capitolflow model --leakage-check   # size the disclosure-lag information gap
 capitolflow refresh      # all of the above, in order
@@ -144,11 +260,21 @@ the gap — which is itself a measurement of how much the disclosure lag is wort
 leaks the future. Splits are expanding-window with a gap covering the full return
 horizon.
 
-**Honest expectations for the model.** On any real sample this is a low-signal
-problem with a few thousand usable observations. Treat a positive information
-coefficient as a hypothesis worth investigating, not a trading strategy. The test
+**Honest expectations.** This is a low-signal problem. Published academic work on
+congressional trading finds effects that are small, unstable across time periods,
+and concentrated in exactly the window you cannot trade. A positive information
+coefficient here is a hypothesis worth investigating, not a strategy. The test
 suite deliberately confirms the model finds *no* signal in random-walk synthetic
-prices, which is the behavior you want.
+prices, which is the behaviour you want from an honest harness.
+
+**The scoreboard is the real test.** `capitolflow predict --scoreboard` compares
+predictions the model made months ago against what actually happened, with no
+refitting involved. Every backtest in the world can be talked into looking good;
+a forward record cannot. Give it a few months before you believe anything.
+
+**This is research tooling, not investment advice.** Nothing here accounts for
+transaction costs, slippage, taxes, position sizing, or your risk tolerance, and
+none of it is a recommendation to buy or sell anything.
 
 ---
 

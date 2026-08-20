@@ -42,6 +42,10 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
+      - name: Day of week
+        id: dow
+        run: echo "n=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+
       # The database is the accumulated state. Restoring it makes each run
       # incremental; without it every run would re-download years of PDFs.
       - name: Restore database
@@ -57,6 +61,7 @@ jobs:
           CAPITOLFLOW_DELAY: "1.2"
           CAPITOLFLOW_MAX_FILINGS: "600"
           CAPITOLFLOW_MAX_OCR: "250"
+          CAPITOLFLOW_MAX_EARNINGS: "400"
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
@@ -64,6 +69,18 @@ jobs:
         run: |
           python -m capitolflow refresh ${{ inputs.full_backfill && '--full' || '' }} | tee refresh.json
           python -m capitolflow health
+
+      # Weights are refitted weekly rather than daily: the underlying data moves
+      # slowly, and refitting on every run invites reading noise as change.
+      - name: Refit factor weights (Mondays and manual runs)
+        if: github.event_name == 'workflow_dispatch' || fromJSON(steps.dow.outputs.n) == 1
+        run: python -m capitolflow backtest --splits 6 --null 150 | tee backtest.json
+
+      - name: Generate rankings
+        run: python -m capitolflow predict --top 10 | tee predictions.json
+
+      - name: Score past predictions against what actually happened
+        run: python -m capitolflow predict --scoreboard | tee scoreboard.json
 
       - name: Build dashboard
         run: python -m capitolflow export --out site
@@ -80,7 +97,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: capitolflow-db
-          path: data/capitolflow.db
+          path: |
+            data/capitolflow.db
+            refresh.json
+            predictions.json
           retention-days: 14
           if-no-files-found: warn
 

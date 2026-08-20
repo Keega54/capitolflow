@@ -208,3 +208,93 @@ CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
     v TEXT
 );
+
+-- ================================================================ v2: prediction layer
+CREATE TABLE IF NOT EXISTS earnings (
+    ticker         TEXT NOT NULL,
+    report_date    TEXT NOT NULL,          -- date the figures were released
+    fiscal_period  TEXT,
+    eps_actual     REAL,
+    eps_estimate   REAL,
+    surprise_pct   REAL,
+    revenue_actual REAL,
+    revenue_estimate REAL,
+    rev_surprise_pct REAL,
+    time_of_day    TEXT,                   -- bmo | amc | unknown
+    source         TEXT,
+    PRIMARY KEY (ticker, report_date)
+);
+CREATE INDEX IF NOT EXISTS idx_earn_date ON earnings(report_date);
+
+CREATE TABLE IF NOT EXISTS event_index (
+    theme    TEXT NOT NULL,                -- conflict | tariffs | energy | health | ai | monetary
+    date     TEXT NOT NULL,
+    intensity REAL,                        -- raw volume measure from the provider
+    z_score  REAL,                         -- standardized against a trailing window
+    source   TEXT,
+    PRIMARY KEY (theme, date)
+);
+CREATE INDEX IF NOT EXISTS idx_event_date ON event_index(date);
+
+CREATE TABLE IF NOT EXISTS ticker_sectors (
+    ticker   TEXT PRIMARY KEY,
+    sector   TEXT,
+    industry TEXT,
+    source   TEXT
+);
+
+-- Fitted factor weights, one row per factor per walk-forward refit.
+CREATE TABLE IF NOT EXISTS factor_weights (
+    fit_id       TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    as_of        TEXT NOT NULL,
+    factor       TEXT NOT NULL,
+    weight       REAL,
+    raw_ic       REAL,                     -- standalone IC of this factor in the fit window
+    stability    REAL,                     -- sign agreement across bootstrap resamples
+    PRIMARY KEY (fit_id, horizon_days, factor)
+);
+CREATE INDEX IF NOT EXISTS idx_fw_asof ON factor_weights(as_of);
+
+CREATE TABLE IF NOT EXISTS backtest_results (
+    run_id        TEXT NOT NULL,
+    horizon_days  INTEGER NOT NULL,
+    fold          INTEGER,
+    test_start    TEXT,
+    test_end      TEXT,
+    n_obs         INTEGER,
+    ic            REAL,
+    top_decile_ret REAL,
+    bottom_decile_ret REAL,
+    long_short    REAL,
+    hit_rate      REAL,
+    null_ic_mean  REAL,                    -- label-shuffled control
+    null_ic_p95   REAL,
+    PRIMARY KEY (run_id, horizon_days, fold)
+);
+
+CREATE TABLE IF NOT EXISTS predictions (
+    as_of         TEXT NOT NULL,
+    horizon_days  INTEGER NOT NULL,
+    ticker        TEXT NOT NULL,
+    rank          INTEGER,
+    score         REAL,
+    score_pctile  REAL,
+    expected_excess REAL,
+    confidence    REAL,
+    attribution   TEXT,                    -- json: factor -> signed contribution
+    rationale     TEXT,
+    PRIMARY KEY (as_of, horizon_days, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_pred_asof ON predictions(as_of, horizon_days, rank);
+
+-- Per-trade decomposition of return around the disclosure date.
+CREATE TABLE IF NOT EXISTS trade_timing (
+    txn_id             TEXT PRIMARY KEY REFERENCES transactions(txn_id),
+    horizon_days       INTEGER,
+    pre_disclosure_excess  REAL,           -- trade date -> disclosure date (nobody could trade this)
+    post_disclosure_excess REAL,           -- disclosure date -> disclosure + horizon
+    total_excess       REAL,
+    capturable_share   REAL,               -- post / total, when total is nonzero
+    lag_days           INTEGER
+);

@@ -4,12 +4,13 @@ Every stage is independently re-runnable and safe to interrupt: filings are keye
 by document id, transactions by a deterministic hash, prices by (ticker, date).
 """
 from __future__ import annotations
-import json, logging, traceback
+import json, logging, os, traceback
 from datetime import date, timedelta
 
 from .config import SEC_TICKERS, SETTINGS
 from . import db
-from .sources import aggregator, house, lobbying, members, prices, senate
+from .sources import (aggregator, earnings, events, house, lobbying, members,
+                      prices, senate)
 from .sources.house import Budget
 from .util.http import get_bytes, make_session
 
@@ -114,13 +115,52 @@ def sync_prices(con, max_tickers: int | None = None) -> dict:
         return {"error": str(e)}
 
 
+def ingest_context(con) -> dict:
+    """Earnings, current-events themes, and sector labels."""
+    out = {}
+    rid = db.start_run(con, "earnings")
+    try:
+        n = earnings.sync(con, max_tickers=int(os.environ.get("CAPITOLFLOW_MAX_EARNINGS", "300")))
+        db.finish_run(con, rid, "ok", 0, n)
+        out["earnings"] = n
+    except Exception as e:
+        db.finish_run(con, rid, "error", note=traceback.format_exc())
+        out["earnings"] = {"error": str(e)}
+    rid = db.start_run(con, "events")
+    try:
+        out["event_index"] = events.sync(con)
+        out["sectors"] = events.sync_sectors(con)
+        db.finish_run(con, rid, "ok", 0, out["event_index"])
+    except Exception as e:
+        db.finish_run(con, rid, "error", note=traceback.format_exc())
+        out["events"] = {"error": str(e)}
+    return out
+
+
 def compute_analytics(con, *, event_study: bool = True) -> dict:
-    from .analytics import accuracy, eventstudy, returns
+    from .analytics import accuracy, eventstudy, returns, timing
     out = {}
     r = returns.compute_trade_returns(con)
     out["trade_returns"] = returns.store_trade_returns(con, r)
     s = accuracy.compute_member_scores(con)
     out["member_scores"] = accuracy.store_member_scores(con, s)
+
+    # Disclosure-lag decomposition, and the fitted decay the features depend on.
+    try:
+        t = timing.decompose(con)
+        out["trade_timing"] = timing.store(con, t)
+        out["timing_summary"] = timing.summary(t)
+        # Stored under its own key so the dashboard never depends on the shape
+        # of the last full-refresh report to find it.
+        db.set_kv(con, "timing_summary", out["timing_summary"])
+        decay = timing.fit_decay(con)
+        hl = decay.get("half_life_days")
+        if hl is not None and isinstance(hl, float) and hl == hl and hl > 0:
+            db.set_kv(con, "signal_half_life_days", hl)
+        db.set_kv(con, "signal_decay", decay)
+        out["signal_half_life_days"] = hl
+    except Exception as e:
+        log.warning("timing analysis failed: %s", e)
     if event_study:
         try:
             con.execute("DELETE FROM event_studies WHERE scope='txn'")
@@ -130,6 +170,30 @@ def compute_analytics(con, *, event_study: bool = True) -> dict:
             log.warning("event study failed: %s", e)
             out["event_studies"] = 0
     return out
+
+
+def run_backtest(con, *, n_splits: int = 6, n_null: int = 120) -> dict:
+    """Fit factor weights and measure them against a shuffled-label null."""
+    from .analytics import backtest, features
+    rid = db.start_run(con, "backtest")
+    try:
+        panel = features.build(con)
+        rep = backtest.run(con, panel=panel, n_splits=n_splits, n_null=n_null)
+        db.finish_run(con, rid, "ok", 0, rep.get("n_rows", 0))
+        return rep
+    except Exception as e:
+        db.finish_run(con, rid, "error", note=traceback.format_exc())
+        log.error("backtest failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
+def make_predictions(con, top_n: int = 10) -> dict:
+    from .analytics import features, rank
+    try:
+        return rank.generate(con, panel=features.build(con), top_n=top_n)
+    except Exception as e:
+        log.error("prediction failed: %s", e)
+        return {"status": "error", "error": str(e)}
 
 
 def train_model(con, model_out: str | None = None) -> dict:
@@ -148,9 +212,11 @@ def refresh(con, *, full: bool = False, with_model: bool = False) -> dict:
     report["disclosures"] = ingest_disclosures(con, incremental=not full)
     report["lobbying"] = ingest_lobbying(con)
     report["prices"] = sync_prices(con)
+    report["context"] = ingest_context(con)
     report["analytics"] = compute_analytics(con)
     if with_model:
-        report["model"] = train_model(con)
+        report["backtest"] = run_backtest(con)
+        report["predictions"] = make_predictions(con)
     report["counts"] = health(con)
     db.set_kv(con, "last_refresh", report)
     return report
@@ -168,6 +234,9 @@ def health(con) -> dict:
         "distinct_tickers": q("SELECT COUNT(DISTINCT ticker) FROM transactions WHERE ticker IS NOT NULL"),
         "price_rows": q("SELECT COUNT(*) FROM prices"),
         "lobbying_filings": q("SELECT COUNT(*) FROM lobbying_filings"),
+        "earnings_rows": q("SELECT COUNT(*) FROM earnings"),
+        "event_index_rows": q("SELECT COUNT(*) FROM event_index"),
+        "predictions": q("SELECT COUNT(*) FROM predictions"),
         "latest_trade_date": q("SELECT MAX(transaction_date) FROM transactions"),
         "latest_filed_date": q("SELECT MAX(filed_date) FROM filings"),
     }

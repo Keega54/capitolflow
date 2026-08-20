@@ -73,13 +73,38 @@ def txn_id(filing_id: str, asset: str, txn_date, txn_type, amount_low, owner) ->
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:20]
 
 
+def json_safe(obj):
+    """Recursively replace non-finite floats with None.
+
+    Python's json module happily writes NaN and Infinity, which are NOT valid
+    JSON. A browser's JSON.parse rejects the entire document, so one NaN buried
+    in a statistics blob silently blanks a whole dashboard panel. Every value
+    that leaves this process as JSON goes through here.
+    """
+    import math
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    # numpy scalars
+    if hasattr(obj, "item") and not isinstance(obj, (str, bytes)):
+        try:
+            return json_safe(obj.item())
+        except Exception:
+            return obj
+    return obj
+
+
 def get_kv(con, k, default=None):
     r = con.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
     return json.loads(r["v"]) if r else default
 
 
 def set_kv(con, k, v):
-    con.execute("INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)", (k, json.dumps(v)))
+    con.execute("INSERT OR REPLACE INTO kv (k,v) VALUES (?,?)",
+                (k, json.dumps(json_safe(v), default=str)))
 
 
 def start_run(con, source: str) -> int:
