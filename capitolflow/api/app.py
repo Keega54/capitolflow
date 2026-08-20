@@ -64,6 +64,10 @@ def create_app(db_path: str | None = None):
     def _predictions():
         return wrap(views.predictions)
 
+    @app.get("/api/scoreboard.json")
+    def _scoreboard():
+        return wrap(views.scoreboard)
+
     @app.get("/api/events.json")
     def _events(limit: int = 100):
         return wrap(views.events, limit=limit)

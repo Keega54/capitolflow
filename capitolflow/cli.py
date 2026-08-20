@@ -38,6 +38,15 @@ def main(argv=None) -> int:
     p.add_argument("--splits", type=int, default=6)
     p.add_argument("--null", type=int, default=120, help="shuffled-label draws per fold")
 
+    p = sub.add_parser("universe", help="recompute the focused core universe")
+    p.add_argument("--size", type=int, default=50)
+
+    p = sub.add_parser("scoreboard", help="score the model's picks against reality")
+    p.add_argument("--simulate", action="store_true",
+                   help="rebuild the backtested pick history walk-forward")
+    p.add_argument("--step", type=int, default=4,
+                   help="rebalance every N weeks when simulating")
+
     p = sub.add_parser("predict", help="produce the ranked short- and long-term lists")
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--scoreboard", action="store_true",
@@ -101,6 +110,10 @@ def main(argv=None) -> int:
             t = timing.decompose(con)
             timing.store(con, t)
             _print({"summary": timing.summary(t), "decay": timing.fit_decay(con)})
+        elif a.cmd == "universe":
+            _print(pipeline.refresh_universe(con, size=a.size))
+        elif a.cmd == "scoreboard":
+            _print(pipeline.update_scoreboard(con, simulate=a.simulate, step=a.step))
         elif a.cmd == "backtest":
             _print(pipeline.run_backtest(con, n_splits=a.splits, n_null=a.null))
         elif a.cmd == "predict":

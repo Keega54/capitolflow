@@ -26,6 +26,7 @@ def export_site(con, out_dir: str = "site") -> dict:
         "lobbying": views.lobbying(con),
         "events": views.events(con, limit=100),
         "predictions": views.predictions(con),
+        "scoreboard": views.scoreboard(con),
     }
     payloads["meta"] = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

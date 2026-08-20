@@ -104,6 +104,14 @@ def ingest_lobbying(con, years=None) -> dict:
         return {"error": str(e)}
 
 
+def refresh_universe(con, size: int | None = None) -> dict:
+    """Recompute the focused set of names we guarantee daily data for."""
+    from .analytics import universe
+    size = size or int(os.environ.get("CAPITOLFLOW_UNIVERSE_SIZE",
+                                      str(universe.DEFAULT_SIZE)))
+    return universe.refresh(con, size=size)
+
+
 def sync_prices(con, max_tickers: int | None = None) -> dict:
     rid = db.start_run(con, "prices")
     try:
@@ -196,6 +204,24 @@ def make_predictions(con, top_n: int = 10) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def update_scoreboard(con, *, simulate: bool = False, step: int = 4) -> dict:
+    """Score the model's picks. `simulate` rebuilds the backtested history."""
+    from .analytics import features, scoreboard
+    out = {}
+    try:
+        out["live_resolved"] = scoreboard.resolve_live(con)
+        if simulate:
+            panel = features.build(con)
+            out["simulated"] = scoreboard.simulate(con, panel=panel, step=step)
+        rep = scoreboard.report(con)
+        db.set_kv(con, "scoreboard", rep)
+        out["report"] = rep
+    except Exception as e:
+        log.error("scoreboard failed: %s", e)
+        out["error"] = str(e)
+    return out
+
+
 def train_model(con, model_out: str | None = None) -> dict:
     from .analytics import model
     try:
@@ -211,12 +237,16 @@ def refresh(con, *, full: bool = False, with_model: bool = False) -> dict:
     report["reference"] = sync_reference(con)
     report["disclosures"] = ingest_disclosures(con, incremental=not full)
     report["lobbying"] = ingest_lobbying(con)
+    # The universe is recomputed BEFORE prices so newly popular names get their
+    # history fetched on the same run they enter on.
+    report["universe"] = refresh_universe(con)
     report["prices"] = sync_prices(con)
     report["context"] = ingest_context(con)
     report["analytics"] = compute_analytics(con)
     if with_model:
         report["backtest"] = run_backtest(con)
         report["predictions"] = make_predictions(con)
+        report["scoreboard"] = update_scoreboard(con, simulate=True)
     report["counts"] = health(con)
     db.set_kv(con, "last_refresh", report)
     return report
@@ -237,6 +267,8 @@ def health(con) -> dict:
         "earnings_rows": q("SELECT COUNT(*) FROM earnings"),
         "event_index_rows": q("SELECT COUNT(*) FROM event_index"),
         "predictions": q("SELECT COUNT(*) FROM predictions"),
+        "core_universe": q("SELECT COUNT(*) FROM core_universe"),
+        "picks_scored": q("SELECT COUNT(*) FROM pick_history WHERE resolved=1"),
         "latest_trade_date": q("SELECT MAX(transaction_date) FROM transactions"),
         "latest_filed_date": q("SELECT MAX(filed_date) FROM filings"),
     }

@@ -74,6 +74,7 @@ def needed_tickers(con, min_confidence: float = 0.6) -> list[str]:
 
 
 def sync_prices(con, tickers=None, *, session=None, include_benchmark: bool = True,
+                universe_first: bool = True,
                 max_tickers: int | None = None, refresh_days: int = 3) -> int:
     s = session or make_session()
     tickers = list(tickers or needed_tickers(con))

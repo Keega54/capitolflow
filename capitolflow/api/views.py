@@ -149,6 +149,16 @@ def predictions(con):
     return out
 
 
+def scoreboard(con):
+    """Track record, with backtested and live kept strictly apart."""
+    from ..db import get_kv
+    rep = get_kv(con, "scoreboard") or {"backtested": {}, "live": {}}
+    rep["universe"] = _recs(pd.read_sql_query(
+        "SELECT ticker, rank, n_trades, n_members, gross_amount, last_traded, "
+        "added_on, reason FROM core_universe ORDER BY rank", con))
+    return rep
+
+
 def events(con, limit=100):
     return _recs(pd.read_sql_query("""
         SELECT e.key, e.event_date, e.car, e.car_tstat, e.beta, e.r2, e.n_obs,

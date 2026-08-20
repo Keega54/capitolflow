@@ -110,6 +110,16 @@
   .attr .ab{position:relative;height:9px;
             background:linear-gradient(90deg,transparent 49.5%,var(--axis) 49.5%,var(--axis) 50.5%,transparent 50.5%)}
   .attr .ab i{position:absolute;height:9px;top:0;display:block}
+  .sub{font-size:12.5px;font-weight:600;margin:0 0 8px;color:var(--text-secondary)}
+  .meter{margin-bottom:14px}
+  .meter .mh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+  .meter .ml{font-size:12px;color:var(--text-secondary)}
+  .meter .mv{font-size:15px;font-weight:650;font-variant-numeric:tabular-nums}
+  .meter .mt{position:relative;height:10px;border-radius:5px;
+             background:color-mix(in srgb,var(--text-primary) 8%,transparent);overflow:hidden}
+  .meter .mf{position:absolute;left:0;top:0;height:10px;border-radius:5px}
+  .meter .mk{position:absolute;top:-3px;width:2px;height:16px;background:var(--axis);opacity:.85}
+  .meter .mn{font-size:11px;color:var(--muted);margin-top:4px}
   .empty{color:var(--muted);padding:26px 0;text-align:center;font-size:13px}
   a{color:var(--series-1)}
   footer{max-width:1240px;margin:0 auto;padding:0 24px 48px;color:var(--muted);font-size:11.5px;line-height:1.6}
@@ -137,6 +147,40 @@
       by the time the filing became public.</p>
     <div class="grid tiles" id="timingTiles"></div>
     <div class="verdict" id="timingVerdict"></div>
+  </section>
+
+  <section class="card" id="trackCard">
+    <h2>Track record</h2>
+    <p class="cap">What the model picked, and what those picks actually did. The two
+      records below are never combined: a simulation run over history is not evidence that
+      something works going forward.</p>
+    <div class="ctl">
+      <div class="toggle" id="trackMode">
+        <button data-v="backtested" aria-pressed="true">Backtested (simulated)</button>
+        <button data-v="live" aria-pressed="false">Live (recorded ahead)</button>
+      </div>
+      <div class="toggle" id="trackHorizon">
+        <button data-v="21" aria-pressed="true">~1 month</button>
+        <button data-v="126" aria-pressed="false">~6 months</button>
+      </div>
+    </div>
+    <div class="verdict" id="trackVerdict"></div>
+    <div class="grid tiles" id="trackTiles"></div>
+    <div class="grid two" style="margin-top:14px">
+      <div>
+        <h3 class="sub">Growth of $1 — picks vs benchmark</h3>
+        <div class="legend">
+          <span><i style="background:var(--series-1)"></i>Model picks</span>
+          <span><i style="background:var(--series-2)"></i>Benchmark</span>
+        </div>
+        <div id="trackCurve"></div>
+      </div>
+      <div>
+        <h3 class="sub">Accuracy</h3>
+        <div id="accuracyMeters"></div>
+        <div class="note" id="trackNote"></div>
+      </div>
+    </div>
   </section>
 
   <section class="card">
@@ -274,7 +318,7 @@ $('#theme').onclick=()=>{const d=document.documentElement;
 const S={};
 async function load(){
   const base=(location.protocol==='file:'?'':'')+'api/';
-  const names=['summary','tickers','members','timeseries','delays','clusters','lobbying','meta','predictions'];
+  const names=['summary','tickers','members','timeseries','delays','clusters','lobbying','meta','predictions','scoreboard'];
   await Promise.all(names.map(async n=>{
     try{const r=await fetch(base+n+'.json');S[n]=r.ok?await r.json():null;}catch(e){S[n]=null;}
   }));
@@ -488,6 +532,84 @@ function timingSection(){
   v.innerHTML='<strong>What this means:</strong> '+(ts.verdict||'');
 }
 
+let trackMode='backtested', trackH='21';
+const pct=v=>(v==null||!isFinite(v))?'—':((v>=0?'+':'')+(v*100).toFixed(1)+'%');
+
+function track(){
+  const SB=S.scoreboard||{}, r=((SB[trackMode]||{})[trackH])||{};
+  const v=$('#trackVerdict'), tl=$('#trackTiles');
+  if(r.status!=='ok'){
+    tl.innerHTML=''; $('#trackCurve').innerHTML=''; $('#accuracyMeters').innerHTML='';
+    $('#trackNote').innerHTML='';
+    v.className='verdict';
+    v.innerHTML = trackMode==='live'
+      ? `<strong>No live record yet.</strong> Live results only exist once predictions made
+         on a past date have had their full ${trackH}-day horizon play out. On a new install
+         that takes months — and that gap is the honest state of things, not a bug.
+         The backtested tab has simulated history in the meantime.`
+      : `<strong>Not enough history.</strong> Run <code>capitolflow scoreboard --simulate</code>
+         once enough price and disclosure data has loaded.`;
+    return;
+  }
+  v.className='verdict '+(trackMode==='live'?'good':'warn');
+  v.innerHTML = trackMode==='backtested'
+    ? `<strong>Simulated, not a track record.</strong> These picks were reconstructed for past
+       dates using only data available then, but the simulation still knows which companies
+       exist today and never had to place a real order. Costs, slippage and taxes are excluded.`
+    : `<strong>Live forward record.</strong> Every pick below was written down before its
+       outcome was knowable. This is the only evidence that counts. Costs excluded.`;
+
+  const items=[
+    ['Picks return', pct(r.cumulative_return), `over ${r.n_chained_periods} held periods`],
+    ['Benchmark', pct(r.benchmark_cumulative_return), 'same periods, buy and hold'],
+    ['Excess', pct(r.cumulative_excess), 'the part the model added'],
+    ['Per year', pct(r.annualized_excess),
+     (r.annualized_excess==null||!isFinite(r.annualized_excess))
+       ? 'needs 3+ completed periods' : 'annualized excess'],
+  ];
+  tl.innerHTML=items.map(([k,val,n])=>{
+    const neg=String(val).startsWith('-');
+    return `<div class="tile"><div class="k">${k}</div>
+      <div class="v" style="color:${k==='Benchmark'?'var(--text-primary)':(neg?'var(--neg)':'var(--pos)')}">${val}</div>
+      <div class="n">${n}</div></div>`;}).join('');
+
+  const cs=getComputedStyle(document.body);
+  if((r.curve||[]).length<2){
+    $('#trackCurve').innerHTML='<div class="empty">Only '+((r.curve||[]).length)+
+      ' completed period so far — a curve needs at least two points. It fills in as horizons elapse.</div>';
+  } else lineChart($('#trackCurve'), r.curve||[],
+    [{key:'picks',label:'Model picks',color:cs.getPropertyValue('--series-1').trim()},
+     {key:'benchmark',label:'Benchmark',color:cs.getPropertyValue('--series-2').trim()}],
+    'period',{yFmt:v=>'$'+v.toFixed(2),tFmt:v=>v==null?'—':'$'+(+v).toFixed(2),yFloor:1.05,
+              aria:'Growth of one dollar in model picks versus the benchmark'});
+
+  $('#accuracyMeters').innerHTML=[
+    meter('Picks that beat the benchmark', r.hit_rate, 0.5,
+          `${r.n_picks} individual picks. 50% is a coin flip.`),
+    meter('Periods that beat the benchmark', r.periods_beating_benchmark, 0.5,
+          `${r.n_periods} rebalance dates.`),
+  ].join('');
+
+  const t=r.t_stat;
+  $('#trackNote').innerHTML=
+    `Average excess per pick <strong>${pct(r.mean_excess_per_pick)}</strong> `+
+    `(t=${t==null||!isFinite(t)?'—':t.toFixed(2)}${Math.abs(t||0)>2?', distinguishable from luck':', within the range of luck'}). `+
+    `Best: ${r.best_pick?r.best_pick.ticker+' '+pct(r.best_pick.excess_return):'—'}. `+
+    `Worst: ${r.worst_pick?r.worst_pick.ticker+' '+pct(r.worst_pick.excess_return):'—'}. `+
+    `Window ${r.first_period} to ${r.last_period}.`;
+}
+
+function meter(label, val, mark, note){
+  if(val==null||!isFinite(val)) val=0;
+  const good=val>mark;
+  return `<div class="meter"><div class="mh"><span class="ml">${label}</span>
+    <span class="mv" style="color:${good?'var(--pos)':'var(--neg)'}">${(val*100).toFixed(1)}%</span></div>
+    <div class="mt"><div class="mf" style="width:${Math.max(0,Math.min(1,val))*100}%;
+      background:${good?'var(--pos)':'var(--neg)'}"></div>
+      <div class="mk" style="left:${mark*100}%"></div></div>
+    <div class="mn">${note}</div></div>`;
+}
+
 let predMode='short_term';
 function predictions(){
   const P=(S.predictions||{}), H=(P.horizons||{})[predMode];
@@ -567,7 +689,7 @@ function icChart(){
 }
 
 function render(){
-  tiles(); timingSection(); predictions(); weightsChart(); icChart();
+  tiles(); timingSection(); track(); predictions(); weightsChart(); icChart();
   tickers(); clusters(); members(); lobby(); delaysChart();
   const cs=getComputedStyle(document.body);
   lineChart($('#ts'),(S.timeseries||[]),[
@@ -578,12 +700,28 @@ function render(){
   $('#meta').textContent=m.generated_at?`Data refreshed ${new Date(m.generated_at).toLocaleString()}.`:'';
 }
 
+$$('#trackMode button').forEach(b=>b.onclick=()=>{trackMode=b.dataset.v;
+  $$('#trackMode button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#trackHorizon button').forEach(b=>b.onclick=()=>{trackH=b.dataset.v;
+  $$('#trackHorizon button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
 $$('#predMode button').forEach(b=>b.onclick=()=>{predMode=b.dataset.v;
-  $$('#predMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  $$('#trackMode button').forEach(b=>b.onclick=()=>{trackMode=b.dataset.v;
+  $$('#trackMode button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#trackHorizon button').forEach(b=>b.onclick=()=>{trackH=b.dataset.v;
+  $$('#trackHorizon button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#predMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));
   predictions(); weightsChart(); icChart();});
 $$('#tickMode button').forEach(b=>b.onclick=()=>{tickMode=b.dataset.v;
-  $$('#predMode button').forEach(b=>b.onclick=()=>{predMode=b.dataset.v;
-  $$('#predMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  $$('#trackMode button').forEach(b=>b.onclick=()=>{trackMode=b.dataset.v;
+  $$('#trackMode button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#trackHorizon button').forEach(b=>b.onclick=()=>{trackH=b.dataset.v;
+  $$('#trackHorizon button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#predMode button').forEach(b=>b.onclick=()=>{predMode=b.dataset.v;
+  $$('#trackMode button').forEach(b=>b.onclick=()=>{trackMode=b.dataset.v;
+  $$('#trackMode button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#trackHorizon button').forEach(b=>b.onclick=()=>{trackH=b.dataset.v;
+  $$('#trackHorizon button').forEach(x=>x.setAttribute('aria-pressed',x===b)); track();});
+$$('#predMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));
   predictions(); weightsChart(); icChart();});
 $$('#tickMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));tickers();});
 $$('#tickView button').forEach(b=>b.onclick=()=>{tickView=b.dataset.v;

@@ -298,3 +298,34 @@ CREATE TABLE IF NOT EXISTS trade_timing (
     capturable_share   REAL,               -- post / total, when total is nonzero
     lag_days           INTEGER
 );
+
+-- ================================================================ v3: universe + track record
+-- The focused set of names the project guarantees fresh daily data for.
+CREATE TABLE IF NOT EXISTS core_universe (
+    ticker       TEXT PRIMARY KEY,
+    rank         INTEGER,
+    n_trades     INTEGER,
+    n_members    INTEGER,
+    gross_amount REAL,
+    last_traded  TEXT,
+    added_on     TEXT,
+    reason       TEXT
+);
+
+-- Every pick the model has ever made, with what actually happened next.
+-- `mode` separates a simulated history from a genuine forward record; conflating
+-- the two is the most common way a project like this flatters itself.
+CREATE TABLE IF NOT EXISTS pick_history (
+    as_of         TEXT NOT NULL,
+    horizon_days  INTEGER NOT NULL,
+    ticker        TEXT NOT NULL,
+    rank          INTEGER,
+    score         REAL,
+    mode          TEXT NOT NULL,      -- 'backtested' (simulated) | 'live' (recorded ahead of time)
+    realised_return REAL,             -- the pick's own return over the horizon
+    benchmark_return REAL,
+    excess_return REAL,
+    resolved      INTEGER DEFAULT 0,  -- 1 once the horizon has fully elapsed
+    PRIMARY KEY (as_of, horizon_days, ticker, mode)
+);
+CREATE INDEX IF NOT EXISTS idx_pick_hist ON pick_history(mode, horizon_days, as_of);

@@ -62,6 +62,7 @@ jobs:
           CAPITOLFLOW_MAX_FILINGS: "600"
           CAPITOLFLOW_MAX_OCR: "250"
           CAPITOLFLOW_MAX_EARNINGS: "400"
+          CAPITOLFLOW_UNIVERSE_SIZE: "50"
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
@@ -79,8 +80,16 @@ jobs:
       - name: Generate rankings
         run: python -m capitolflow predict --top 10 | tee predictions.json
 
-      - name: Score past predictions against what actually happened
-        run: python -m capitolflow predict --scoreboard | tee scoreboard.json
+      # Live scoring runs daily and is cheap: it only fills in outcomes for picks
+      # whose horizon has now elapsed. The walk-forward simulation is expensive
+      # and only rebuilt alongside the weekly refit.
+      - name: Score picks against what actually happened
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ steps.dow.outputs.n }}" = "1" ]; then
+            python -m capitolflow scoreboard --simulate --step 4 | tee scoreboard.json
+          else
+            python -m capitolflow scoreboard | tee scoreboard.json
+          fi
 
       - name: Build dashboard
         run: python -m capitolflow export --out site

@@ -31,6 +31,8 @@ used purely as a cross-check.
 | Event study | Market-model cumulative abnormal returns around each trade date |
 | **Disclosure timing** | Splits each trade's edge at the filing date: how much happened before the public could act, how much was left |
 | **Ranked picks** | Top 10 short-term (~1 month) and top 10 long-term (~6 months), with per-factor attribution |
+| **Track record** | Cumulative % return vs benchmark and hit rate, with simulated and live records kept strictly apart |
+| **Core universe** | The ~50 most politically-traded names, refreshed daily and guaranteed fresh prices |
 | **Fitted weights** | Seven factors weighted by walk-forward regression, tested against a shuffled-label null |
 | Model | Gradient-boosted forward-return model with purged walk-forward validation |
 
@@ -173,12 +175,43 @@ run, so you always have a copy of the data.
 
 ### When does it update?
 
-| What | When |
-|---|---|
-| New disclosures, prices, earnings, events | every day, ~11:17 UTC (~7am ET) |
-| Factor weights refitted | Mondays, and on any manual run |
-| Rankings regenerated | every day, after the data refresh |
-| Dashboard republished | every day, right after |
+| What | When | Why |
+|---|---|---|
+| Core universe recomputed | every day | a newly popular name enters the same run it qualifies on |
+| Prices, disclosures, earnings, events | every day, ~11:17 UTC (~7am ET) | market data has to be current for anything else to mean anything |
+| Rankings regenerated | every day | new data, new scores |
+| Live picks scored | every day | cheap: only fills in outcomes whose horizon has elapsed |
+| Factor weights refitted | Mondays + manual runs | see below |
+| Backtested history rebuilt | Mondays + manual runs | expensive walk-forward simulation |
+| Dashboard republished | every day | right after everything above |
+
+**Why weights aren't refit daily.** The relationships being estimated move on the
+scale of months. Refitting every day would mostly re-estimate noise, and you'd
+watch weights jitter around and mistake that for the model learning something.
+Weekly refitting with daily re-scoring gets the responsiveness without the
+thrash. If you disagree, change the `if:` condition on the refit step — it's one
+line.
+
+### Reading the track record
+
+The dashboard shows two records and never merges them:
+
+- **Backtested** — picks reconstructed for past dates using only data available
+  then. Available immediately, and useful, but still a simulation: it knows which
+  companies exist today, and it never had to place a real order.
+- **Live** — picks written to the database *before* the outcome was knowable, then
+  scored once the horizon elapsed. This is the only real evidence, and it is
+  **empty on a new install** until enough time passes. That gap is the honest
+  state of things.
+
+Neither includes trading costs, slippage, or taxes.
+
+One trap worth knowing about, because it bit this project during development: if
+you rebalance monthly but hold for six months, consecutive periods overlap by
+five months, and chaining those returns compounds the same market move six times.
+It showed **+350,000%** before the fix. Cumulative returns are now chained only
+over periods you could actually have held back to back, and there's a test
+asserting no curve exceeds a sanity ceiling.
 
 Weights are refitted weekly rather than daily on purpose: the underlying
 relationships move slowly, and refitting every day invites reading noise as
@@ -215,7 +248,9 @@ capitolflow context      # earnings, current-events themes, sector labels
 capitolflow timing       # how much edge survives the disclosure lag
 capitolflow backtest     # fit factor weights, test against a shuffled-label null
 capitolflow predict      # produce the top-10 short and long term lists
-capitolflow predict --scoreboard   # score PAST predictions against what happened
+capitolflow universe     # recompute the ~50-name core universe
+capitolflow scoreboard   # score live picks whose horizon has elapsed
+capitolflow scoreboard --simulate  # rebuild the walk-forward backtested history
 capitolflow model        # train the forward-return model
 capitolflow model --leakage-check   # size the disclosure-lag information gap
 capitolflow refresh      # all of the above, in order
