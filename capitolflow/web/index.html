@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CapitolFlow — congressional trading, by trade date</title>
+<style>
+  .viz-root, body {
+    color-scheme: light;
+    --surface-1:#fcfcfb; --page:#f9f9f7;
+    --text-primary:#0b0b0b; --text-secondary:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,0.10);
+    --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+    --pos:#2a78d6; --neg:#d03b3b; --mid:#f0efec;
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+    --seq-100:#cde2fb; --seq-250:#86b6ef; --seq-400:#3987e5; --seq-550:#1c5cab; --seq-700:#0d366b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:where(:not([data-theme="light"])) body, :root:where(:not([data-theme="light"])) .viz-root{
+      color-scheme: dark;
+      --surface-1:#1a1a19; --page:#0d0d0d;
+      --text-primary:#fff; --text-secondary:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10);
+      --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+      --pos:#3987e5; --neg:#e66767; --mid:#383835;
+      --seq-100:#0d366b; --seq-250:#184f95; --seq-400:#2a78d6; --seq-550:#5598e7; --seq-700:#9ec5f4;
+    }
+  }
+  :root[data-theme="dark"] body, :root[data-theme="dark"] .viz-root{
+    color-scheme: dark;
+    --surface-1:#1a1a19; --page:#0d0d0d;
+    --text-primary:#fff; --text-secondary:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,0.10);
+    --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+    --pos:#3987e5; --neg:#e66767; --mid:#383835;
+    --seq-100:#0d366b; --seq-250:#184f95; --seq-400:#2a78d6; --seq-550:#5598e7; --seq-700:#9ec5f4;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--text-primary);
+       font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+       font-variant-numeric:tabular-nums}
+  header{padding:28px 24px 8px;max-width:1240px;margin:0 auto;display:flex;
+         align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  h1{font-size:22px;margin:0 0 4px;font-weight:650;letter-spacing:-0.01em}
+  .sub{color:var(--text-secondary);font-size:13px;max-width:70ch}
+  main{max-width:1240px;margin:0 auto;padding:8px 24px 64px}
+  .card{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;
+        padding:18px 20px;margin:16px 0}
+  .card h2{font-size:15px;margin:0 0 2px;font-weight:600}
+  .card .cap{color:var(--text-secondary);font-size:12.5px;margin:0 0 14px;max-width:78ch}
+  .grid{display:grid;gap:16px}
+  .tiles{grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+  .two{grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
+  .tile{background:var(--surface-1);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .tile .k{color:var(--text-secondary);font-size:12px;letter-spacing:.02em}
+  .tile .v{font-size:27px;font-weight:640;letter-spacing:-0.02em;margin-top:4px}
+  .tile .n{color:var(--muted);font-size:11.5px;margin-top:3px}
+  .bar-row{display:grid;grid-template-columns:78px 1fr 92px;gap:10px;align-items:center;
+           padding:3px 0;cursor:default}
+  .bar-row .lbl{font-weight:560;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-track{position:relative;height:16px}
+  .bar{height:16px;border-radius:0 4px 4px 0;background:var(--series-1);transition:opacity .12s}
+  .bar-row:hover .bar{opacity:.78}
+  .bar-row .val{text-align:right;color:var(--text-secondary);font-size:12.5px}
+  .div-track{position:relative;height:16px;background:linear-gradient(90deg,transparent 49.7%,var(--axis) 49.7%,var(--axis) 50.3%,transparent 50.3%)}
+  .div-bar{position:absolute;height:16px;top:0}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th{text-align:left;font-weight:600;color:var(--text-secondary);padding:6px 10px 6px 0;
+     border-bottom:1px solid var(--axis);white-space:nowrap;cursor:pointer;user-select:none}
+  th:hover{color:var(--text-primary)}
+  td{padding:5px 10px 5px 0;border-bottom:1px solid var(--grid);white-space:nowrap}
+  td.num,th.num{text-align:right}
+  tbody tr:hover{background:color-mix(in srgb,var(--series-1) 7%,transparent)}
+  .scroll{max-height:420px;overflow:auto}
+  svg{display:block;width:100%;overflow:visible}
+  .gridline{stroke:var(--grid);stroke-width:1}
+  .axisline{stroke:var(--axis);stroke-width:1}
+  .tick{fill:var(--muted);font-size:11px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 10px;font-size:12.5px;color:var(--text-secondary)}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+  .tt{position:fixed;pointer-events:none;z-index:50;background:var(--surface-1);
+      border:1px solid var(--border);border-radius:7px;padding:8px 10px;font-size:12px;
+      box-shadow:0 6px 20px rgba(0,0,0,.16);opacity:0;transition:opacity .1s;max-width:280px}
+  .tt.on{opacity:1}
+  .tt b{display:block;margin-bottom:3px;font-size:12.5px}
+  .tt span{color:var(--text-secondary)}
+  .ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+  select,button{font:inherit;font-size:12.5px;padding:5px 9px;border-radius:7px;
+    border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary);cursor:pointer}
+  button:hover,select:hover{border-color:var(--axis)}
+  button[aria-pressed="true"]{background:color-mix(in srgb,var(--series-1) 15%,var(--surface-1));
+    border-color:var(--series-1)}
+  .toggle{display:flex;gap:6px}
+  .flag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600}
+  .flag.late{background:color-mix(in srgb,var(--critical) 16%,transparent);color:var(--critical)}
+  .flag.ok{background:color-mix(in srgb,var(--good) 16%,transparent);color:var(--good)}
+  .note{color:var(--muted);font-size:11.5px;margin-top:10px;line-height:1.5}
+  .empty{color:var(--muted);padding:26px 0;text-align:center;font-size:13px}
+  a{color:var(--series-1)}
+  footer{max-width:1240px;margin:0 auto;padding:0 24px 48px;color:var(--muted);font-size:11.5px;line-height:1.6}
+</style>
+</head>
+<body class="viz-root">
+<header>
+  <div>
+    <h1>CapitolFlow</h1>
+    <div class="sub">Trading by members of Congress and executive-branch filers, measured on the date
+      the trade happened — not the date it was disclosed. Built from primary filings.</div>
+  </div>
+  <div class="toggle">
+    <button id="theme" aria-pressed="false">Dark</button>
+  </div>
+</header>
+<main>
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Most-traded companies</h2>
+    <p class="cap">Ranked by how many <em>distinct people</em> traded the stock, which is harder to
+      distort than dollar volume — one large trade cannot manufacture consensus. Switch to dollars
+      to see where the money actually went.</p>
+    <div class="ctl">
+      <span style="color:var(--text-secondary)">Rank by</span>
+      <div class="toggle" id="tickMode">
+        <button data-v="n_members" aria-pressed="true">People</button>
+        <button data-v="gross_volume" aria-pressed="false">Dollars</button>
+        <button data-v="net_flow" aria-pressed="false">Net flow</button>
+      </div>
+      <span style="flex:1"></span>
+      <div class="toggle" id="tickView">
+        <button data-v="chart" aria-pressed="true">Chart</button>
+        <button data-v="table" aria-pressed="false">Table</button>
+      </div>
+    </div>
+    <div id="tickers"></div>
+    <div class="note" id="tickNote"></div>
+  </section>
+
+  <section class="grid two">
+    <div class="card">
+      <h2>Trading volume over time</h2>
+      <p class="cap">Disclosed purchases and sales by trade month.</p>
+      <div class="legend">
+        <span><i style="background:var(--series-1)"></i>Purchases</span>
+        <span><i style="background:var(--series-2)"></i>Sales</span>
+      </div>
+      <div id="ts"></div>
+    </div>
+    <div class="card">
+      <h2>How long the public waited</h2>
+      <p class="cap">Days between the trade and its disclosure. The STOCK Act allows 30 days from
+        notification and 45 from the trade; bars past that line are late filings.</p>
+      <div id="delays"></div>
+      <div class="note" id="delayNote"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Clustered trading</h2>
+    <p class="cap">Windows where an unusual number of separate people traded the same stock the same
+      direction. Co-occurrence, not proof of anything — but it is where a human should look first.</p>
+    <div class="scroll" id="clusters"></div>
+  </section>
+
+  <section class="card">
+    <h2>Traders, ranked</h2>
+    <p class="cap">Volume, filing punctuality, and timing accuracy. <strong>Accuracy</strong> is
+      excess return versus the benchmark over 90 days from the trade date, shrunk toward the
+      population average in proportion to sample size — so a handful of lucky trades does not
+      top the table.</p>
+    <div class="scroll" id="members"></div>
+  </section>
+
+  <section class="card">
+    <h2>Lobbying overlay</h2>
+    <p class="cap">Companies by federal lobbying spend against congressional trading interest in the
+      same quarter. A relationship here is co-occurrence and nothing stronger.</p>
+    <div id="lobby"></div>
+    <div class="note" id="lobbyNote"></div>
+  </section>
+</main>
+<footer>
+  <div id="meta"></div>
+  <div style="margin-top:8px">Sources: U.S. House Clerk financial disclosures, U.S. Senate Electronic
+  Financial Disclosure, Senate/House Lobbying Disclosure Act filings. Amount ranges are the brackets
+  filers report; point estimates are the geometric midpoint of each bracket and are approximations.
+  Nothing here is investment advice or an allegation of wrongdoing.</div>
+</footer>
+<div class="tt" id="tt"></div>
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const tt=$('#tt');
+const fmtUSD=v=>{const a=Math.abs(v||0);
+  if(a>=1e9)return (v/1e9).toFixed(2)+'B'; if(a>=1e6)return (v/1e6).toFixed(1)+'M';
+  if(a>=1e3)return (v/1e3).toFixed(0)+'K'; return (v||0).toFixed(0);};
+const fmtN=v=>(v==null?'—':Number(v).toLocaleString());
+const fmtPct=v=>(v==null||!isFinite(v)?'—':(v*100).toFixed(1)+'%');
+const fmtSigned=v=>(v>=0?'+':'−')+'$'+fmtUSD(Math.abs(v));
+function showTT(e,html){tt.innerHTML=html;tt.classList.add('on');
+  const r=tt.getBoundingClientRect();
+  tt.style.left=Math.min(e.clientX+14,innerWidth-r.width-10)+'px';
+  tt.style.top=Math.min(e.clientY+14,innerHeight-r.height-10)+'px';}
+function hideTT(){tt.classList.remove('on');}
+function hook(el,html){el.addEventListener('mousemove',e=>showTT(e,html));el.addEventListener('mouseleave',hideTT);}
+
+$('#theme').onclick=()=>{const d=document.documentElement;
+  const dark=d.getAttribute('data-theme')==='dark';
+  d.setAttribute('data-theme',dark?'light':'dark');
+  $('#theme').textContent=dark?'Dark':'Light';$('#theme').setAttribute('aria-pressed',!dark);
+  render();};
+
+const S={};
+async function load(){
+  const base=(location.protocol==='file:'?'':'')+'api/';
+  const names=['summary','tickers','members','timeseries','delays','clusters','lobbying','meta'];
+  await Promise.all(names.map(async n=>{
+    try{const r=await fetch(base+n+'.json');S[n]=r.ok?await r.json():null;}catch(e){S[n]=null;}
+  }));
+  render();
+}
+
+function tiles(){
+  const s=S.summary; if(!s)return;
+  const md=s.median_disclosure_delay, late=s.pct_filed_late;
+  const items=[
+    ['Disclosed trades',fmtN(s.n_transactions),`across ${fmtN(s.n_tickers)} securities`],
+    ['People trading',fmtN(s.n_members),'members & officials with filings'],
+    ['Estimated volume','$'+fmtUSD(s.gross_volume),'geometric midpoint of ranges'],
+    ['Median disclosure lag',(md==null?'—':md+' days'),
+      `${fmtPct(late)} filed past the 45-day mark`],
+  ];
+  $('#tiles').innerHTML=items.map(([k,v,n])=>
+    `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`).join('');
+}
+
+let tickMode='n_members', tickView='chart';
+function tickers(){
+  const el=$('#tickers'), d=(S.tickers||[]).slice();
+  if(!d.length){el.innerHTML='<div class="empty">No trades ingested yet.</div>';return;}
+  if(tickView==='table'){el.innerHTML=table(d,[
+    ['ticker','Ticker'],['n_members','People',1],['n_trades','Trades',1],
+    ['n_members_buying','Buyers',1],['n_members_selling','Sellers',1],
+    ['gross_volume','Volume',1,fmtUSD],['net_flow','Net flow',1,fmtSigned],
+    ['weighted_net_flow','Wtd net flow',1,fmtSigned],
+    ['avg_filing_delay','Avg lag',1,v=>v==null?'—':Math.round(v)+'d']]);
+    $('#tickNote').textContent='Wtd net flow scales each person’s dollars by their accuracy weight.';return;}
+
+  const key=tickMode, diverge=(key==='net_flow');
+  d.sort((a,b)=>Math.abs(b[key]||0)-Math.abs(a[key]||0));
+  const top=d.slice(0,22);
+  const max=Math.max(...top.map(r=>Math.abs(r[key]||0)),1);
+  const fmt=key==='n_members'?fmtN:(diverge?fmtSigned:v=>'$'+fmtUSD(v));
+  el.innerHTML=top.map(r=>{
+    const v=r[key]||0, w=Math.abs(v)/max*100;
+    const track=diverge
+      ? `<div class="div-track"><div class="div-bar" style="background:${v>=0?'var(--pos)':'var(--neg)'};
+          ${v>=0?`left:50%;border-radius:0 4px 4px 0;`:`right:50%;border-radius:4px 0 0 4px;`}
+          width:${w/2}%"></div></div>`
+      : `<div class="bar-track"><div class="bar" style="width:${Math.max(w,0.6)}%"></div></div>`;
+    return `<div class="bar-row" data-t="${r.ticker}"><div class="lbl">${r.ticker}</div>
+      ${track}<div class="val">${fmt(v)}</div></div>`;
+  }).join('');
+  $$('.bar-row',el).forEach(row=>{
+    const r=top.find(x=>x.ticker===row.dataset.t);
+    hook(row,`<b>${r.ticker}</b>
+      <span>${fmtN(r.n_members)} people · ${fmtN(r.n_trades)} trades</span><br>
+      <span>${fmtN(r.n_members_buying)} buying · ${fmtN(r.n_members_selling)} selling</span><br>
+      <span>Volume $${fmtUSD(r.gross_volume)} · net ${fmtSigned(r.net_flow)}</span><br>
+      <span>Avg disclosure lag ${r.avg_filing_delay==null?'—':Math.round(r.avg_filing_delay)+'d'}</span>`);
+  });
+  $('#tickNote').textContent = diverge
+    ? 'Blue = net buying, red = net selling. Bars are scaled to the largest absolute flow.'
+    : (key==='n_members' ? 'Bar length is the number of distinct people who traded the stock.'
+                         : 'Bar length is estimated gross dollar volume in both directions.');
+}
+
+function table(rows,cols){
+  const th=cols.map(c=>`<th class="${c[2]?'num':''}" data-k="${c[0]}">${c[1]}</th>`).join('');
+  const tr=rows.map(r=>'<tr>'+cols.map(c=>{
+    const f=c[3]||(c[2]?fmtN:(v=>v==null?'—':v));
+    return `<td class="${c[2]?'num':''}">${f(r[c[0]])}</td>`;}).join('')+'</tr>').join('');
+  return `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+}
+
+function lineChart(el,data,series,xKey,opts={}){
+  if(!data.length){el.innerHTML='<div class="empty">No data yet.</div>';return;}
+  const W=680,H=210,P={t:12,r:14,b:26,l:52};
+  const xs=data.map(d=>d[xKey]);
+  const maxY=Math.max(...data.flatMap(d=>series.map(s=>+d[s.key]||0)),1);
+  const X=i=>P.l+i*(W-P.l-P.r)/Math.max(xs.length-1,1);
+  const Y=v=>H-P.b-(v/maxY)*(H-P.t-P.b);
+  const ticks=[0,.25,.5,.75,1].map(f=>f*maxY);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.aria||'time series'}">`;
+  ticks.forEach(t=>{svg+=`<line class="gridline" x1="${P.l}" x2="${W-P.r}" y1="${Y(t)}" y2="${Y(t)}"/>
+    <text class="tick" x="${P.l-8}" y="${Y(t)+4}" text-anchor="end">${opts.yFmt?opts.yFmt(t):Math.round(t)}</text>`;});
+  svg+=`<line class="axisline" x1="${P.l}" x2="${W-P.r}" y1="${H-P.b}" y2="${H-P.b}"/>`;
+  // Draw right-to-left so the newest period always survives, skipping any label
+  // whose box would touch the one already placed. Edge labels anchor inward so
+  // they cannot overflow the plot box.
+  const CW=6.2, PAD=9;
+  let leftmost=Infinity;
+  for(let i=xs.length-1;i>=0;i--){
+    const lbl=String(xs[i]), w=lbl.length*CW, x=X(i);
+    const anchor = i===xs.length-1 ? 'end' : (i===0 ? 'start' : 'middle');
+    const left  = anchor==='end' ? x-w : (anchor==='start' ? x : x-w/2);
+    const right = left + w;
+    if(right > leftmost - PAD) continue;
+    leftmost = left;
+    svg+=`<text class="tick" x="${x}" y="${H-P.b+16}" text-anchor="${anchor}">${lbl}</text>`;
+  }
+  series.forEach(s=>{
+    const pts=data.map((d,i)=>`${X(i)},${Y(+d[s.key]||0)}`).join(' ');
+    svg+=`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2"
+           stroke-linejoin="round" stroke-linecap="round"/>`;
+    const li=data.length-1;
+    svg+=`<circle cx="${X(li)}" cy="${Y(+data[li][s.key]||0)}" r="4" fill="${s.color}"
+           stroke="var(--surface-1)" stroke-width="2"/>`;
+  });
+  data.forEach((d,i)=>{svg+=`<rect x="${X(i)-(W-P.l-P.r)/xs.length/2}" y="${P.t}"
+    width="${(W-P.l-P.r)/xs.length}" height="${H-P.t-P.b}" fill="transparent" data-i="${i}"/>`;});
+  svg+='</svg>';el.innerHTML=svg;
+  $$('rect[data-i]',el).forEach(r=>{const d=data[+r.dataset.i];
+    hook(r,`<b>${d[xKey]}</b>`+series.map(s=>
+      `<span style="color:${s.color}">■</span> ${s.label}: ${opts.tFmt?opts.tFmt(d[s.key]):fmtN(d[s.key])}`).join('<br>')
+      +`<br><span>${fmtN(d.n_trades)} trades · ${fmtN(d.n_members)} people</span>`);});
+}
+
+function delaysChart(){
+  const el=$('#delays'), d=(S.delays&&S.delays.histogram)||[];
+  if(!d.length){el.innerHTML='<div class="empty">No data yet.</div>';return;}
+  const max=Math.max(...d.map(r=>r.n),1), total=d.reduce((a,b)=>a+b.n,0);
+  const LATE=new Set(['46-90','91-180','180+']);
+  el.innerHTML=d.map(r=>{
+    const late=LATE.has(r.bucket);
+    return `<div class="bar-row" data-b="${r.bucket}">
+      <div class="lbl">${r.bucket}${r.bucket==='<0'?'':'d'}</div>
+      <div class="bar-track"><div class="bar" style="width:${Math.max(r.n/max*100,0.6)}%;
+        background:${late?'var(--critical)':'var(--series-1)'}"></div></div>
+      <div class="val">${fmtN(r.n)}</div></div>`;}).join('');
+  $$('.bar-row',el).forEach(row=>{const r=d.find(x=>x.bucket===row.dataset.b);
+    hook(row,`<b>${r.bucket} days</b><span>${fmtN(r.n)} trades — ${fmtPct(r.n/total)} of all disclosures</span>
+      ${LATE.has(r.bucket)?'<br><span style="color:var(--critical)">past the 45-day deadline</span>':''}`);});
+  const lateN=d.filter(r=>LATE.has(r.bucket)).reduce((a,b)=>a+b.n,0);
+  $('#delayNote').innerHTML=`Red bars are trades disclosed more than 45 days after they happened — `+
+    `<strong>${fmtPct(lateN/total)}</strong> of the ${fmtN(total)} trades with both dates recorded.`;
+}
+
+function clusters(){
+  const el=$('#clusters'), d=S.clusters||[];
+  if(!d.length){el.innerHTML='<div class="empty">No clusters found at the current threshold.</div>';return;}
+  el.innerHTML=table(d,[['ticker','Ticker'],['side','Side'],
+    ['window_start','Window opens'],['window_end','Window closes'],
+    ['n_members','People',1],['n_trades','Trades',1],
+    ['volume','Volume',1,v=>'$'+fmtUSD(v)],['weighted_volume','Wtd volume',1,v=>'$'+fmtUSD(v)]]);
+}
+
+function members(){
+  const el=$('#members'), d=S.members||[];
+  if(!d.length){el.innerHTML='<div class="empty">No members ingested yet.</div>';return;}
+  el.innerHTML=table(d,[
+    ['full_name','Name'],['role_title','Role'],['party','Party'],['state','St'],
+    ['n_trades','Trades',1],['n_tickers','Tickers',1],
+    ['gross_volume','Volume',1,v=>'$'+fmtUSD(v)],
+    ['avg_filing_delay','Avg lag',1,v=>v==null?'—':Math.round(v)+'d'],
+    ['n_late','Late',1,v=>v?`<span class="flag late">${v}</span>`:'<span class="flag ok">0</span>'],
+    ['hit_rate','Hit rate',1,fmtPct],
+    ['shrunk_excess','Accuracy (90d)',1,v=>v==null?'—':(v>=0?'+':'')+ (v*100).toFixed(2)+'%'],
+    ['n_scored','n',1]]);
+  sortable(el);
+}
+
+function lobby(){
+  const el=$('#lobby'), d=((S.lobbying||{}).by_ticker)||[];
+  if(!d.length){el.innerHTML='<div class="empty">No lobbying data ingested yet.</div>';return;}
+  const top=d.slice(0,20), max=Math.max(...top.map(r=>r.lobby_spend||0),1);
+  el.innerHTML=`<div class="legend"><span><i style="background:var(--series-3)"></i>Federal lobbying spend</span></div>`
+    + top.map(r=>`<div class="bar-row" data-t="${r.ticker}"><div class="lbl">${r.ticker}</div>
+      <div class="bar-track"><div class="bar" style="width:${Math.max((r.lobby_spend||0)/max*100,0.6)}%;
+        background:var(--series-3)"></div></div>
+      <div class="val">$${fmtUSD(r.lobby_spend)}</div></div>`).join('');
+  $$('.bar-row',el).forEach(row=>{const r=top.find(x=>x.ticker===row.dataset.t);
+    hook(row,`<b>${r.ticker}</b><span>Lobbying $${fmtUSD(r.lobby_spend)}</span><br>
+      <span>Trading volume $${fmtUSD(r.gross_volume)}</span><br>
+      <span>${fmtN(r.n_members)} member-quarters of trading activity</span>`);});
+  const corr=((S.lobbying||{}).correlation)||[];
+  const c0=corr.find(c=>c.lag_quarters===0&&c.metric==='n_members');
+  $('#lobbyNote').innerHTML = c0
+    ? `Same-quarter rank correlation between lobbying spend and the number of people trading a stock:
+       <strong>ρ = ${c0.spearman_rho}</strong> (p = ${(+c0.p_value).toExponential(1)}, n = ${c0.n}).
+       Spearman rather than Pearson because both variables are dominated by a few very large values.`
+    : '';
+}
+
+function sortable(root){
+  $$('th',root).forEach((th,i)=>{th.onclick=()=>{
+    const tb=$('tbody',root), rows=[...tb.rows];
+    const dir=th.dataset.dir==='asc'?-1:1; $$('th',root).forEach(x=>delete x.dataset.dir);
+    th.dataset.dir=dir===1?'asc':'desc';
+    rows.sort((a,b)=>{const x=a.cells[i].textContent,y=b.cells[i].textContent;
+      const nx=parseFloat(x.replace(/[^0-9.\-]/g,'')),ny=parseFloat(y.replace(/[^0-9.\-]/g,''));
+      if(isFinite(nx)&&isFinite(ny))return (nx-ny)*dir; return x.localeCompare(y)*dir;});
+    rows.forEach(r=>tb.appendChild(r));};});
+}
+
+function render(){
+  tiles(); tickers(); clusters(); members(); lobby(); delaysChart();
+  const cs=getComputedStyle(document.body);
+  lineChart($('#ts'),(S.timeseries||[]),[
+    {key:'buy_volume',label:'Purchases',color:cs.getPropertyValue('--series-1').trim()},
+    {key:'sell_volume',label:'Sales',color:cs.getPropertyValue('--series-2').trim()}],
+    'period',{yFmt:v=>'$'+fmtUSD(v),tFmt:v=>'$'+fmtUSD(v),aria:'Monthly disclosed purchase and sale volume'});
+  const m=S.meta||{};
+  $('#meta').textContent=m.generated_at?`Data refreshed ${new Date(m.generated_at).toLocaleString()}.`:'';
+}
+
+$$('#tickMode button').forEach(b=>b.onclick=()=>{tickMode=b.dataset.v;
+  $$('#tickMode button').forEach(x=>x.setAttribute('aria-pressed',x===b));tickers();});
+$$('#tickView button').forEach(b=>b.onclick=()=>{tickView=b.dataset.v;
+  $$('#tickView button').forEach(x=>x.setAttribute('aria-pressed',x===b));tickers();});
+load();
+</script>
+</body></html>
