@@ -9,3 +9,7 @@ venv/
 tests/fixtures/*.pdf
 refresh.json
 .DS_Store
+
+# a mis-extracted nested copy must never be committable
+**/fixtures/*.pdf
+capitolflow/tests/
