@@ -1,0 +1,129 @@
+# Fetches new disclosures, recomputes everything, and republishes the dashboard.
+# Runs on a schedule with no server to maintain. The database is carried between
+# runs as a cache artifact so each run only fetches what is new.
+name: refresh
+
+on:
+  schedule:
+    - cron: "17 11 * * *"        # 11:17 UTC daily (~7am ET) — off the hour on purpose
+  workflow_dispatch:
+    inputs:
+      full_backfill:
+        description: "Backfill all years instead of just recent ones"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install OCR toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr poppler-utils
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Day of week
+        id: dow
+        run: echo "n=$(date -u +%u)" >> "$GITHUB_OUTPUT"
+
+      # The database is the accumulated state. Restoring it makes each run
+      # incremental; without it every run would re-download years of PDFs.
+      - name: Restore database
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: capitolflow-db-${{ github.run_id }}
+          restore-keys: capitolflow-db-
+
+      - name: Refresh
+        env:
+          CAPITOLFLOW_UA: "CapitolFlow/1.0 (github.com/${{ github.repository }})"
+          CAPITOLFLOW_DELAY: "1.2"
+          CAPITOLFLOW_MAX_FILINGS: "600"
+          CAPITOLFLOW_MAX_OCR: "250"
+          CAPITOLFLOW_MAX_EARNINGS: "400"
+          CAPITOLFLOW_UNIVERSE_SIZE: "50"
+          LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: |
+          python -m capitolflow refresh ${{ inputs.full_backfill && '--full' || '' }} | tee refresh.json
+          python -m capitolflow health
+
+      # Weights are refitted weekly rather than daily: the underlying data moves
+      # slowly, and refitting on every run invites reading noise as change.
+      - name: Refit factor weights (Mondays and manual runs)
+        if: github.event_name == 'workflow_dispatch' || fromJSON(steps.dow.outputs.n) == 1
+        run: python -m capitolflow backtest --splits 6 --null 150 | tee backtest.json
+
+      - name: Generate rankings
+        run: python -m capitolflow predict --top 10 | tee predictions.json
+
+      # Live scoring runs daily and is cheap: it only fills in outcomes for picks
+      # whose horizon has now elapsed. The walk-forward simulation is expensive
+      # and only rebuilt alongside the weekly refit.
+      - name: Score picks against what actually happened
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "${{ steps.dow.outputs.n }}" = "1" ]; then
+            python -m capitolflow scoreboard --simulate --step 4 | tee scoreboard.json
+          else
+            python -m capitolflow scoreboard | tee scoreboard.json
+          fi
+
+      - name: Build dashboard
+        run: python -m capitolflow export --out site
+
+      - name: Save database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: capitolflow-db-${{ github.run_id }}
+
+      - name: Upload database artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capitolflow-db
+          path: |
+            data/capitolflow.db
+            refresh.json
+            predictions.json
+          retention-days: 14
+          if-no-files-found: warn
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
