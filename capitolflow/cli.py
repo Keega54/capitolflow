@@ -68,7 +68,9 @@ def main(argv=None) -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
 
-    sub.add_parser("health", help="row counts and freshness")
+    p = sub.add_parser("health", help="row counts, freshness, and blocking problems")
+    p.add_argument("--strict", action="store_true",
+                   help="exit non-zero if anything would make the dashboard meaningless")
 
     p = sub.add_parser("synthetic", help="populate a demo database with synthetic data")
     p.add_argument("--seed", type=int, default=7)
@@ -143,7 +145,13 @@ def main(argv=None) -> int:
             from .api.export import export_site
             _print(export_site(con, a.out))
         elif a.cmd == "health":
-            _print(pipeline.health(con))
+            h = pipeline.health(con)
+            problems = pipeline.blocking_problems(con)
+            h["blocking_problems"] = problems
+            _print(h)
+            if a.strict and problems:
+                print("\nFAILING: " + "; ".join(problems), file=sys.stderr)
+                return 1
     return 0
 
 

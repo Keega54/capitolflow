@@ -63,13 +63,22 @@ jobs:
           CAPITOLFLOW_MAX_OCR: "250"
           CAPITOLFLOW_MAX_EARNINGS: "400"
           CAPITOLFLOW_UNIVERSE_SIZE: "50"
+          # Providers rate-limit hard. The benchmark and core universe are
+          # fetched first, so a truncated run still leaves a usable database.
+          CAPITOLFLOW_MAX_PRICE_TICKERS: "150"
+          CAPITOLFLOW_PRICES: "yahoo"
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: |
           python -m capitolflow refresh ${{ inputs.full_backfill && '--full' || '' }} | tee refresh.json
-          python -m capitolflow health
+
+      # Stop here if the data is unusable. Publishing a dashboard with no prices
+      # produces a site that looks broken for no visible reason; a red X with the
+      # reason printed is far more useful than a silently empty page.
+      - name: Fail fast if the data is unusable
+        run: python -m capitolflow health --strict
 
       # Weights are refitted weekly rather than daily: the underlying data moves
       # slowly, and refitting on every run invites reading noise as change.

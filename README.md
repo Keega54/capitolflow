@@ -229,6 +229,32 @@ server, no hosting bill, and nothing running on your laptop.
 If you later want a custom domain, add a `CNAME` file to the `site/` output and
 point your domain's DNS at GitHub Pages; nothing else about the setup changes.
 
+### If the dashboard comes up empty
+
+The most likely cause is prices. Everything — returns, member scores, features,
+the backtest, the rankings — is defined relative to price history, so an empty
+`prices` table empties the entire site while the disclosure data sits there
+perfectly intact.
+
+The run now **fails loudly** rather than publishing a broken site: a `health
+--strict` gate stops the workflow with a red X and prints exactly what is wrong.
+
+Price providers are the usual culprit, because they treat cloud IPs differently
+from laptops:
+
+| Provider | Key | Notes |
+|---|---|---|
+| **yahoo** | none | the default here — generally works from GitHub Actions |
+| **stooq** | none | fine locally, but **blocks datacenter IPs** and caps daily requests |
+| **fmp** | yes | most reliable if you have a key; set `FMP_API_KEY` |
+
+All three are tried in order, and a provider that starts refusing is retired for
+the rest of the run instead of being asked hundreds more times. Switch the
+preferred one with `CAPITOLFLOW_PRICES=stooq|yahoo|fmp`.
+
+The benchmark and the core universe are fetched **first**, so even a run cut
+short by rate limits leaves a usable database behind.
+
 Optional API keys go in **Settings → Secrets and variables → Actions**:
 `LDA_API_KEY` (lobbying — free, from lda.gov), plus `FINNHUB_API_KEY`,
 `QUIVER_API_KEY`, `FMP_API_KEY` if you want commercial cross-check feeds. Every

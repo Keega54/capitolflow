@@ -58,7 +58,11 @@ class Settings:
     quiver_key: str | None = os.environ.get("QUIVER_API_KEY") or None
     fmp_key: str | None = os.environ.get("FMP_API_KEY") or None
 
-    price_provider: str = os.environ.get("CAPITOLFLOW_PRICES", "stooq")  # stooq | yahoo | fmp
+    # Yahoo first: this project's main home is a cloud scheduler, and Stooq
+    # refuses datacenter IPs and enforces a daily cap. Stooq remains a key-free
+    # fallback and is usually the better choice when running on a laptop.
+    price_provider: str = os.environ.get("CAPITOLFLOW_PRICES", "yahoo")  # yahoo | stooq | fmp
+    max_price_tickers: int = int(os.environ.get("CAPITOLFLOW_MAX_PRICE_TICKERS", "150"))
     horizons: tuple = field(default_factory=lambda: RETURN_HORIZONS)
     benchmark: str = BENCHMARK
 

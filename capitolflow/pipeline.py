@@ -113,14 +113,19 @@ def refresh_universe(con, size: int | None = None) -> dict:
 
 
 def sync_prices(con, max_tickers: int | None = None) -> dict:
+    """Fetch prices, and refuse to call a zero-row fetch a success."""
     rid = db.start_run(con, "prices")
     try:
-        n = prices.sync_prices(con, max_tickers=max_tickers)
-        db.finish_run(con, rid, "ok", 0, n)
-        return {"rows": n}
+        rep = prices.sync_prices(
+            con, max_tickers=max_tickers or SETTINGS.max_price_tickers)
+        ok = rep.get("status") == "ok"
+        db.finish_run(con, rid, "ok" if ok else "error", 0, rep.get("rows", 0),
+                      note=None if ok else rep.get("status"))
+        return rep
     except Exception as e:
         db.finish_run(con, rid, "error", note=traceback.format_exc())
-        return {"error": str(e)}
+        log.error("price sync failed: %s", e)
+        return {"status": f"FAILED: {e}", "rows": 0}
 
 
 def ingest_context(con) -> dict:
@@ -250,6 +255,29 @@ def refresh(con, *, full: bool = False, with_model: bool = False) -> dict:
     report["counts"] = health(con)
     db.set_kv(con, "last_refresh", report)
     return report
+
+
+def blocking_problems(con) -> list[str]:
+    """Conditions that make the published dashboard meaningless.
+
+    Everything downstream of prices is undefined without them, so an empty price
+    table is not a warning — it is a failed run, and the scheduler should say so
+    rather than publishing an empty site that looks like a code bug.
+    """
+    q = lambda s, *a: con.execute(s, a).fetchone()[0]
+    out = []
+    if q("SELECT COUNT(*) FROM prices") == 0:
+        out.append("no price data at all — every return, score and prediction is undefined")
+    elif q("SELECT COUNT(*) FROM prices WHERE ticker=?", SETTINGS.benchmark) == 0:
+        out.append(f"no price history for the benchmark {SETTINGS.benchmark} — "
+                   f"excess returns cannot be computed")
+    if q("SELECT COUNT(*) FROM transactions") == 0:
+        out.append("no transactions parsed — check the House/Senate ingest steps")
+    for r in con.execute("""SELECT source, status, note FROM ingest_runs
+                            WHERE status='error' AND finished_at >=
+                              (SELECT MAX(finished_at) FROM ingest_runs) """):
+        out.append(f"stage '{r['source']}' failed: {(r['note'] or 'no detail')[:160]}")
+    return out
 
 
 def health(con) -> dict:

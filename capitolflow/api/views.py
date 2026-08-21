@@ -29,8 +29,10 @@ def summary(con) -> dict:
         ORDER BY filing_delay_days
         LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM transactions WHERE filing_delay_days IS NOT NULL)
     """).fetchone()
-    last = con.execute("SELECT source, MAX(finished_at) t, status FROM ingest_runs "
-                       "GROUP BY source ORDER BY t DESC LIMIT 8").fetchall()
+    # Carry the failure note through: "status: error" with no reason sends you
+    # hunting through Actions logs for something the dashboard already knows.
+    last = con.execute("SELECT source, MAX(finished_at) t, status, note FROM ingest_runs "
+                       "GROUP BY source ORDER BY t DESC LIMIT 10").fetchall()
     return {
         "counts": h,
         "n_transactions": row["n"] or 0,
